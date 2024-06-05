@@ -9,14 +9,6 @@ import (
 	_ "github.com/lib/pq"
 )
 
-const (
-	host     = "localhost"
-	port     = 5432
-	user     = "postgres"
-	password = "080691"
-	dbname   = "HR101"
-)
-
 type Fed_tax_table struct {
 	pay_freq      string
 	marital       string
@@ -28,7 +20,7 @@ type Fed_tax_table struct {
 
 func CalculateTakeHomePay(annuaIncome float64, fedTax float64, socialTax float64, medicareTax float64, stateTax float64, locTax float64, payPeriod string) float64 {
 	payFreq := CalcPayFreq(payPeriod)
-	totalPayPerCheck := annuaIncome / float64(payFreq)
+	totalPayPerCheck := annuaIncome / payFreq
 	takeHomePayPerCheck := totalPayPerCheck - fedTax - socialTax - medicareTax - stateTax - locTax
 	takeHomePayPerCheck = math.Floor(takeHomePayPerCheck*100) / 100
 	fmt.Printf("\nThe take home pay is: $%.2f", takeHomePayPerCheck)
@@ -41,11 +33,11 @@ func calculateAdjustedIncome(totalPayPerCheck float64, addIncome float64, addDed
 
 }
 
-func CalculateFederalTax(annuaIncome float64, dependent float64, addIncome float64, addDeduct float64, extraWithhold float64, fedMaritalStatus string, payPeriod string) float64 {
+func CalculateFederalTax(annuaIncome float64, dependent float64, addIncome float64, addDeduct float64, extraWithhold float64, fedMaritalStatus string, payPeriod string, db *sql.DB) float64 {
 	var fedTax float64 = 0
 
 	payFreq := CalcPayFreq(payPeriod)
-	fed_tax_table := getFedTaxTable(fedMaritalStatus)
+	fed_tax_table := getFedTaxTable(fedMaritalStatus, db)
 
 	totalAdjustedIncome := calculateAdjustedIncome(annuaIncome, addIncome, addDeduct, fed_tax_table[1].adjust_income)
 	taxable := totalAdjustedIncome
@@ -61,9 +53,9 @@ func CalculateFederalTax(annuaIncome float64, dependent float64, addIncome float
 		old_earn = row.earning
 	}
 
-	fedTax = fedTax / float64(payFreq)
+	fedTax = fedTax / payFreq
 
-	fedTax = fedTax - (dependent / float64(payFreq)) //dependent credit Step 3 on W4
+	fedTax = fedTax - (dependent / payFreq) //dependent credit Step 3 on W4
 	if fedTax < 0 {
 		fedTax = 0
 	}
@@ -89,23 +81,23 @@ func CalculateStateTax(annuaIncome float64, stateMaritalStatus string, payPeriod
 func CalculateLocalTax(annuaIncome float64, localMaritalStatus string, payPeriod string) float64 {
 	var locTax float64 = 0
 	payFreq := CalcPayFreq(payPeriod)
-	totalPayPerCheck := annuaIncome / float64(payFreq)
+	totalPayPerCheck := annuaIncome / payFreq
 	locTax = totalPayPerCheck * 0 // to be changed later
 	fmt.Printf("\nThe local tax is: $%.2f", locTax)
 	return locTax
 }
 
-func CalcPayFreq(payPeriod string) int {
-	var payFreq int
+func CalcPayFreq(payPeriod string) float64 {
+	var payFreq float64
 	switch payPeriod {
 	case "M":
-		payFreq = 12
+		payFreq = 12.00
 	case "B":
-		payFreq = 26
+		payFreq = 26.00
 	case "S":
-		payFreq = 24
+		payFreq = 24.00
 	case "W":
-		payFreq = 52
+		payFreq = 52.00
 	}
 
 	return payFreq
@@ -114,7 +106,7 @@ func CalculateSocialTax(annuaIncome float64, payPeriod string) float64 {
 	var socialTax float64 = 0
 	var socialTaxRate float64 = 0.062
 	payFreq := CalcPayFreq(payPeriod)
-	totalPayPerCheck := annuaIncome / float64(payFreq)
+	totalPayPerCheck := annuaIncome / payFreq
 
 	socialTax = totalPayPerCheck * socialTaxRate
 	socialTax = math.Floor(socialTax*100) / 100
@@ -126,7 +118,7 @@ func CalculateMedicareTax(annuaIncome float64, payPeriod string) float64 {
 	var medicareTax float64 = 0
 	var medicareTaxRate float64 = 0.0145
 	payFreq := CalcPayFreq(payPeriod)
-	totalPayPerCheck := annuaIncome / float64(payFreq)
+	totalPayPerCheck := annuaIncome / payFreq
 
 	medicareTax = totalPayPerCheck * medicareTaxRate
 	medicareTax = math.Floor(medicareTax*100) / 100
@@ -134,24 +126,7 @@ func CalculateMedicareTax(annuaIncome float64, payPeriod string) float64 {
 	return medicareTax
 }
 
-func getFedTaxTable(fed_marital string) []Fed_tax_table {
-	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
-		host, port, user, password, dbname)
-
-	// Open connection to the database
-	db, err := sql.Open("postgres", psqlInfo)
-	if err != nil {
-		log.Fatalf("Error opening database: %q", err)
-	}
-	defer db.Close()
-
-	// Ping the database to verify connection
-	err = db.Ping()
-	if err != nil {
-		log.Fatalf("Error pinging database: %q", err)
-	}
-
-	fmt.Println("Successfully connected to the database!")
+func getFedTaxTable(fed_marital string, db *sql.DB) []Fed_tax_table {
 
 	query := "SELECT * FROM fed_tax_table where marital = $1 order by earning"
 	rows, err := db.Query(query, fed_marital)

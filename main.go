@@ -1,14 +1,26 @@
 package main
 
 import (
-	"encoding/json"
+	"database/sql"
 	"fmt"
+	"log"
+
+	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
 
 	"go_Paycalc/mylib"
 
 	"net/http"
 
 	_ "github.com/lib/pq"
+)
+
+const (
+	host     = "localhost"
+	port     = 5432
+	user     = "postgres"
+	password = "080691"
+	dbname   = "HR101"
 )
 
 type RequestBody struct {
@@ -32,49 +44,56 @@ type ResponseBody struct {
 	TakeHomePay                  float64 `json:"takeHomePay"`
 }
 
-func handler(w http.ResponseWriter, r *http.Request) {
-	// Only accept POST requests
-	if r.Method != http.MethodPost {
-		http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Parse the JSON request body
-	var reqBody RequestBody
-	err := json.NewDecoder(r.Body).Decode(&reqBody)
-	if err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	// Perform the calculation
-	fedTaxWithholding := mylib.CalculateFederalTax(reqBody.AnnualIncome, reqBody.Dependent, reqBody.AddIncome, reqBody.AddDeduct, reqBody.ExtraWithhold, reqBody.FedMaritalStatus, reqBody.PayPeriod)
-	socialSecurityTaxWithholding := mylib.CalculateSocialTax(reqBody.AnnualIncome, reqBody.PayPeriod)
-	medicareTaxWithholding := mylib.CalculateMedicareTax(reqBody.AnnualIncome, reqBody.PayPeriod)
-	stateTaxWithholding := mylib.CalculateStateTax(reqBody.AnnualIncome, reqBody.StateMaritalStatus, reqBody.PayPeriod)
-	localTaxWithholding := mylib.CalculateLocalTax(reqBody.AnnualIncome, reqBody.LocalMaritalStatus, reqBody.PayPeriod)
-	takeHomePay := mylib.CalculateTakeHomePay(reqBody.AnnualIncome, fedTaxWithholding, socialSecurityTaxWithholding, medicareTaxWithholding, stateTaxWithholding, localTaxWithholding, reqBody.PayPeriod)
-
-	// Prepare the response
-	respBody := ResponseBody{
-		FedTaxWithholding:            fedTaxWithholding,
-		SocialSecurityTaxWithholding: socialSecurityTaxWithholding,
-		MedicareTaxWithholding:       medicareTaxWithholding,
-		StateTaxWithholding:          stateTaxWithholding,
-		LocalTaxWithholding:          localTaxWithholding,
-		TakeHomePay:                  takeHomePay,
-	}
-
-	// Set the response header to application/json
-	w.Header().Set("Content-Type", "application/json")
-	// Encode the response as JSON and send it
-	json.NewEncoder(w).Encode(respBody)
-}
-
 func main() {
 
-	http.HandleFunc("/api/calculate", handler)
-	fmt.Println("Server is listening on port 8080...")
-	http.ListenAndServe(":8080", nil)
+	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
+		host, port, user, password, dbname)
+
+	// Open connection to the database
+	db, err := sql.Open("postgres", psqlInfo)
+	if err != nil {
+		log.Fatalf("Error opening database: %q", err)
+	}
+	defer db.Close()
+
+	// Ping the database to verify connection
+	err = db.Ping()
+	if err != nil {
+		log.Fatalf("Error pinging database: %q", err)
+	}
+
+	fmt.Println("Successfully connected to the database!")
+
+	router := gin.Default()
+
+	router.Use(cors.Default())
+
+	router.POST("/api/calculate", func(c *gin.Context) {
+		var reqBody RequestBody
+
+		if err := c.ShouldBindJSON(&reqBody); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		fedTaxWithholding := mylib.CalculateFederalTax(reqBody.AnnualIncome, reqBody.Dependent, reqBody.AddIncome, reqBody.AddDeduct, reqBody.ExtraWithhold, reqBody.FedMaritalStatus, reqBody.PayPeriod, db)
+		socialSecurityTaxWithholding := mylib.CalculateSocialTax(reqBody.AnnualIncome, reqBody.PayPeriod)
+		medicareTaxWithholding := mylib.CalculateMedicareTax(reqBody.AnnualIncome, reqBody.PayPeriod)
+		stateTaxWithholding := mylib.CalculateStateTax(reqBody.AnnualIncome, reqBody.StateMaritalStatus, reqBody.PayPeriod)
+		localTaxWithholding := mylib.CalculateLocalTax(reqBody.AnnualIncome, reqBody.LocalMaritalStatus, reqBody.PayPeriod)
+		takeHomePay := mylib.CalculateTakeHomePay(reqBody.AnnualIncome, fedTaxWithholding, socialSecurityTaxWithholding, medicareTaxWithholding, stateTaxWithholding, localTaxWithholding, reqBody.PayPeriod)
+
+		responseBody := ResponseBody{
+			FedTaxWithholding:            fedTaxWithholding,
+			SocialSecurityTaxWithholding: socialSecurityTaxWithholding,
+			MedicareTaxWithholding:       medicareTaxWithholding,
+			StateTaxWithholding:          stateTaxWithholding,
+			LocalTaxWithholding:          localTaxWithholding,
+			TakeHomePay:                  takeHomePay,
+		}
+		c.JSON(http.StatusOK, responseBody)
+	})
+
+	router.Run(":8080")
 
 }
